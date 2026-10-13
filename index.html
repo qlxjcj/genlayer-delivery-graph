@@ -231,17 +231,44 @@ node accepted ⇔  every marker met  ∧  every dependency accepted</code></pre>
 </div>
 
 <script type="module">
-import { createClient, chains } from "https://cdn.jsdelivr.net/npm/genlayer-js@1.2.0/dist/genlayer-js.min.js";
+const CDN = "https://cdn.jsdelivr.net/npm/genlayer-js@1.2.0/+esm";
 
 const ADDRESS = "0x89E3122891B99cC8c13094CBA462b19734a9F459";
 const GRAPH_ID = "g0";
 
 const el = document.getElementById("live");
 
-const client = createClient({
-  chain: chains.testnetBradbury,
-  endpoint: "https://rpc-bradbury.genlayer.com",
-});
+function fail(msg) {
+  el.textContent = "";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = msg;
+  el.appendChild(p);
+}
+
+let client;
+try {
+  const mod = await import(CDN);
+  client = mod.createClient({
+    chain: mod.chains.testnetBradbury,
+    endpoint: "https://rpc-bradbury.genlayer.com",
+  });
+} catch (e) {
+  fail("Could not load the GenLayer SDK: " + String(e).slice(0, 160));
+}
+
+if (client) {
+  try {
+    const raw = await client.readContract({
+      address: ADDRESS,
+      functionName: "get_graph",
+      args: [GRAPH_ID],
+    });
+    render(JSON.parse(raw));
+  } catch (e) {
+    fail("Could not read the chain from this browser: " + String(e).slice(0, 160));
+  }
+}
 
 function row(label, value, cls) {
   const tr = document.createElement("tr");
@@ -285,21 +312,6 @@ function render(graph) {
   note.className = "muted";
   note.textContent = "Read by the explicit id " + GRAPH_ID + ", never a shared latest record.";
   el.appendChild(note);
-}
-
-try {
-  const raw = await client.readContract({
-    address: ADDRESS,
-    functionName: "get_graph",
-    args: [GRAPH_ID],
-  });
-  render(JSON.parse(raw));
-} catch (e) {
-  el.textContent = "";
-  const p = document.createElement("p");
-  p.className = "muted";
-  p.textContent = "Could not read the chain from this browser: " + String(e).slice(0, 160);
-  el.appendChild(p);
 }
 </script>
 </body>
