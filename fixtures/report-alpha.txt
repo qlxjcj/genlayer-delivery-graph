@@ -1,0 +1,11 @@
+Delivery report 412
+
+Build
+  The build passed on 2026-01-05.
+  Unit tests: 148 passed, 0 failed.
+
+Endpoint
+  Endpoint /api/v2 returned status 200 at 09:14.
+
+Sign-off
+  Signed off by the release captain.

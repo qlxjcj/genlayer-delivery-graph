@@ -1,0 +1,8 @@
+Delivery report 3
+
+Build
+  The build passed on 2026-01-05.
+  Unit tests: 148 passed, 0 failed.
+
+Note
+  Nothing else to report. The sign-off is filed separately.
