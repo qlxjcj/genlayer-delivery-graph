@@ -215,8 +215,30 @@ node accepted ⇔  every marker met  ∧  every dependency accepted</code></pre>
 
 <h2>Live record</h2>
 <p class="muted">
-  Read straight from the chain, bound to a specific graph id.
+  Read straight from the chain, bound to a specific graph id. The walkthrough
+  below was run end to end against sources this repository serves: the contract
+  fetched <code>fixtures/report-alpha.txt</code> and
+  <code>fixtures/report-charlie.txt</code> over the network, quoted each marker
+  out of them, released both nodes and left the contract empty.
 </p>
+<div class="card">
+  <table>
+    <tr><th>graph</th><td>g0</td></tr>
+    <tr><th>status</th><td><span class="pill ok">CLOSED</span></td></tr>
+    <tr><th>escrow</th><td>1000000000000000000 atto</td></tr>
+    <tr><th>accepted</th><td>1000000000000000000 atto</td></tr>
+    <tr><th>rejected / blocked</th><td>0 / 0</td></tr>
+    <tr><th>nodes</th><td>n1 = ACCEPTED, n2 = ACCEPTED</td></tr>
+    <tr><th>reconciles</th><td><span class="pill ok">yes</span></td></tr>
+    <tr><th>n1 quoted</th><td>&ldquo;Build… The build passed on 2026-01-05.&rdquo;, &ldquo;Signed off by the release captain.&rdquo;</td></tr>
+    <tr><th>n2 quoted</th><td>&ldquo;The build passed on 2026-01-05.&rdquo;</td></tr>
+  </table>
+  <p class="muted">
+    The spans are copied character for character out of the fetched text, line
+    breaks included. Compare them against <code>fixtures/</code> and see that a
+    model could not have invented them.
+  </p>
+</div>
 <div class="card" id="live">
   <p class="muted">Loading…</p>
 </div>

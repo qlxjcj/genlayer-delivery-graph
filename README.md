@@ -197,6 +197,31 @@ contract fetches them over the network like any other source, which makes the
 on-chain walkthrough reproducible: `report-alpha.txt` carries both markers,
 `report-charlie.txt` carries only the first.
 
+The walkthrough was run end to end on Bradbury — `create_graph` with 1 GEN of
+escrow, two `submit_evidence` calls, the freeze, two settlements in dependency
+order, and `close`:
+
+```
+status          CLOSED
+escrow          1000000000000000000
+accepted_total  1000000000000000000
+rejected_total  0
+blocked_total   0
+settled_count   2
+nodes           n1=ACCEPTED, n2=ACCEPTED
+reconciles      true
+
+n1  ACCEPTED | every marker found | met=[true, true]
+    spans=["Build\n\nThe build passed on 2026-01-05.", "Signed off by the release captain."]
+n2  ACCEPTED | every marker found | met=[true]
+    spans=["The build passed on 2026-01-05."]
+```
+
+The spans are copied character for character out of the text the contract itself
+fetched, line breaks included — compare them against `fixtures/` and see that a
+model could not have invented them. Check it yourself with
+`genlayer call <address> get_graph '"g0"'`.
+
 ---
 
 ## Source integrity
