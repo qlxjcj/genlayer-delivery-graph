@@ -296,8 +296,30 @@ n1  ACCEPTED | every marker found
 
 The spans are copied character for character out of the text the contract itself
 fetched, line breaks and all — compare them against `fixtures/` and see that a
-model could not have invented them. Check it yourself with
-`genlayer call <address> get_node '"g0"' '"n1"'`.
+model could not have invented them.
+
+The graph then ran to completion, `n1` before `n2` because of the dependency
+gate:
+
+```
+g0  CLOSED | settled 2 of 2
+    escrow          1000000000000000000
+    accepted_total  1000000000000000000
+    rejected_total  0
+    blocked_total   0
+    reconciles      true
+
+n1  ACCEPTED  tranche 400000000000000000  judged 4/4  met [true,true]
+n2  ACCEPTED  tranche 600000000000000000  judged 4/4  met [true]
+    spans ["release captain"]
+```
+
+Every node was judged on all four of its configured sources, every marker was
+found, and the escrow came out exactly whole: nothing was stranded in the
+contract, and nothing was stranded in the judged set either.
+
+Check it yourself with
+`genlayer call 0x9901868ea78704b4488a123078228B0215E72858 get_graph '"g0"'`.
 
 ---
 
