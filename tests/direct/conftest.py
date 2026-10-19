@@ -180,15 +180,17 @@ def make_graph(vm, c, nodes, escrow=None, recipient=RECIPIENT, sender=PAYER, val
     return gid
 
 
-def submit(vm, c, gid, nid, url, t):
+def submit(vm, c, gid, nid, url, t, sender=RECIPIENT):
+    """File evidence. Only the claimant may, so that is the default sender."""
     vm.warp(iso(t))
-    vm.sender = STRANGER
+    vm.sender = sender
     return c.submit_evidence(gid, nid, url)
 
 
-def settle(vm, c, gid, nid, t):
+def settle(vm, c, gid, nid, t, sender=STRANGER):
+    """Judgement is permissionless: anyone may settle, so STRANGER is default."""
     vm.warp(iso(t))
-    vm.sender = STRANGER
+    vm.sender = sender
     return c.settle(gid, nid)
 
 

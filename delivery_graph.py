@@ -24,13 +24,8 @@ SPACE = " \t\r\n\f\v"
 
 
 class DeliveryGraph(gl.Contract):
-    """A payer funds a multi-part deliverable as a graph of work nodes.
-
-    Each node carries its own escrow tranche, its own evidence window and a
-    list of literal markers. A node is released to the recipient only when
-    every marker is found in the evidence the contract fetched for it and
-    every dependency below it was accepted; otherwise its tranche returns to
-    the payer. See README."""
+    """Escrow for multi-part deliverables: a graph of nodes, each released only
+    when its markers are found and every dependency was accepted."""
 
     graphs: TreeMap[str, str]
     evidence: TreeMap[str, str]
@@ -38,8 +33,6 @@ class DeliveryGraph(gl.Contract):
 
     def __init__(self):
         self.graph_count = 0
-
-    # ---------------- helpers ----------------
 
     def _addr_hex(self, a) -> str:
         if isinstance(a, str):
@@ -61,7 +54,7 @@ class DeliveryGraph(gl.Contract):
         return True
 
     def _iso_to_epoch(self, s: str) -> int:
-        # Hand-rolled so every validator agrees, with no optional stdlib.
+        # Hand-rolled: validators must agree, so no optional stdlib.
         s = s.strip()
         if len(s) < 19:
             return 0
@@ -89,7 +82,6 @@ class DeliveryGraph(gl.Contract):
         return (era * 146097 + doe - 719468) * 86400 + hh * 3600 + mm * 60 + ss - offset
 
     def _now(self) -> int:
-        # gl.message exposes no clock; the ISO stamp lives on message_raw.
         raw = getattr(gl, "message_raw", None)
         d = None
         if raw is not None:
@@ -107,8 +99,8 @@ class DeliveryGraph(gl.Contract):
         return " ".join(str(text).lower().split())
 
     def _squash(self, text: str) -> str:
-        """lowercase with every blank removed, so a marker survives being
-        wrapped across lines or padded with the odd space a renderer drops in."""
+        """Lowercase with every blank stripped, so a marker survives a renderer
+        wrapping it."""
         out = []
         for ch in str(text).lower():
             if ch in SPACE:
@@ -161,25 +153,21 @@ class DeliveryGraph(gl.Contract):
         except (json.JSONDecodeError, TypeError):
             return []
 
-    # ---------------- marker verification ----------------
-
-    def _marker_met(self, body: str, span: str, marker: str) -> bool:
-        # The model never decides. It only quotes; the code decides.
+    def _marker_met(self, bodies: list, span: str, marker: str) -> bool:
+        # The model never decides, it only quotes. Each source is checked in
+        # full and on its own, so none can crowd another out of the set.
         m = self._squash(marker)
-        if not m:
+        if not m or not any(self._squash(b) for b in bodies):
             return False
-        if not self._squash(body):
-            return False
-        # Fast path: the marker is there literally, so no quote is even needed.
-        if self._norm(marker) in self._norm(body):
+        # Fast path: the marker is literally there, so no quote is needed.
+        if any(self._norm(marker) in self._norm(b) for b in bodies):
             return True
-        # Quoted path: catches the stray blanks a renderer drops inside a word.
-        # The quote only counts if it really occurs in the evidence and really
+        # The quote counts only if it really occurs in a fetched body and really
         # carries the marker, so a model can only lose credit, never create it.
         s = self._squash(span)
         if not s:
             return False
-        return m in s and s in self._squash(body)
+        return m in s and any(s in self._squash(b) for b in bodies)
 
     def _as_spans(self, result, count: int) -> list:
         out = []
@@ -194,15 +182,10 @@ class DeliveryGraph(gl.Contract):
         return out
 
     def _examine(self, urls: list, markers: list) -> dict:
-        """Fetch the node's own sources and quote each marker out of them.
-
-        Fetch and model call share one equivalence block, so there is a single
-        consensus point per settlement. The verdict fields are computed here in
-        code against the text just fetched, so validators agree on the decision
-        rather than on the wording of a leader's answer."""
+        """Fetch the sources and quote each marker out of them. One equivalence
+        block per settlement; a literal marker never reaches the model."""
         count = len(markers)
         if not urls:
-            # Nothing was filed, so there is nothing to fetch and nothing to ask.
             return {"retrieved": False, "met": [False] * count, "spans": [""] * count}
 
         def check() -> dict:
@@ -217,21 +200,23 @@ class DeliveryGraph(gl.Contract):
                 if text.strip():
                     read += 1
                 bodies.append(text)
-            body = "\n".join(bodies)
             if read == 0:
                 return {"retrieved": False, "met": [False] * count, "spans": [""] * count}
-
+            # Every source gets the same fixed share of the prompt, so none can
+            # push another out of what the model is shown.
+            shown = "\n\n".join(["SOURCE " + str(k + 1) + ":\n" + bodies[k][:700]
+                                 for k in range(len(bodies))])
             task = (
-                "Locate text in SOURCE. Decide nothing at all.\n"
-                "For every MARKER return the one span of SOURCE that carries it, copied in the\n"
-                "same character order it appears in. Use an empty string for a marker SOURCE\n"
-                "does not carry. Never invent text that is not in SOURCE.\n\n"
-                "SOURCE:\n" + body[:1600] + "\n\nMARKERS:\n" +
+                "Locate text in the SOURCES. Decide nothing. For each MARKER return the\n"
+                "one span carrying it, copied in the same character order, or an empty\n"
+                "string if no source carries it. Never invent text.\n\n" +
+                shown + "\n\nMARKERS:\n" +
                 "\n".join([str(i + 1) + ". " + str(m) for i, m in enumerate(markers)]) +
-                '\n\nJSON only: {"spans": ["...", ...]} with exactly ' + str(count) + " entries in order."
+                '\n\nJSON only: {"spans": ["...", ...]} with exactly ' +
+                str(count) + " entries in order."
             )
-            # An answer the contract cannot use credits nothing: evidence that
-            # cannot be verified never releases money, and the node still ends.
+            # An answer the contract cannot use credits nothing, and the node
+            # still ends: unverifiable evidence never releases money.
             parsed = None
             try:
                 raw = gl.nondet.exec_prompt(task)
@@ -242,16 +227,16 @@ class DeliveryGraph(gl.Contract):
             except Exception:
                 parsed = None
             spans = self._as_spans(parsed, count)
-            met = [self._marker_met(body, spans[i], str(markers[i])) for i in range(count)]
+            # The model supplies the quoting; the code decides on it, over every
+            # fetched source in full and separately.
+            met = [self._marker_met(bodies, spans[i], str(markers[i])) for i in range(count)]
             return {"retrieved": True, "met": met, "spans": spans}
 
         principle = (
-            "Equivalent only if retrieved matches exactly and every entry of met matches "
-            "exactly. The spans wording may differ, but empty stays empty."
+            "Equivalent only if retrieved and every entry of met match exactly. "
+            "The spans wording may differ, but empty stays empty."
         )
         return gl.eq_principle.prompt_comparative(check, principle)
-
-    # ---------------- creation ----------------
 
     @gl.public.write.payable
     def create_graph(self, recipient: str, nodes: list) -> str:
@@ -288,7 +273,7 @@ class DeliveryGraph(gl.Contract):
                 pid = str(p).strip()
                 # A parent must already exist, so the graph is acyclic by construction.
                 if pid not in seen or pid in plist:
-                    raise gl.vm.UserError("Parents must be earlier, distinct nodes")
+                    raise gl.vm.UserError("Parents must be earlier and distinct")
                 plist.append(pid)
 
             markers = n.get("markers", [])
@@ -298,7 +283,7 @@ class DeliveryGraph(gl.Contract):
             for m in markers:
                 ms = str(m).strip()
                 if not ms or len(ms) > MAX_MARKER_LEN:
-                    raise gl.vm.UserError("Markers must be non-empty and short")
+                    raise gl.vm.UserError("Markers must be short and non-empty")
                 if self._squash(ms) in [self._squash(x) for x in mlist]:
                     raise gl.vm.UserError("Markers must be distinct")
                 mlist.append(ms)
@@ -324,7 +309,7 @@ class DeliveryGraph(gl.Contract):
             cfgs.append({
                 "id": nid, "label": label, "parents": plist, "markers": mlist,
                 "sources": slist, "tranche": tranche, "evidence_by": now + window,
-                "status": OPEN, "reason": "", "spans": [], "met": [],
+                "status": OPEN, "reason": "", "spans": [], "met": [], "judged": [],
             })
 
         # Every unit of the escrow is spoken for before a single one can move.
@@ -342,12 +327,8 @@ class DeliveryGraph(gl.Contract):
         self.graph_count = u256(int(self.graph_count) + 1)
         return gid
 
-    # ---------------- evidence ----------------
-
     @gl.public.write
     def submit_evidence(self, graph_id: str, node_id: str, source_url: str) -> str:
-        """File a source to be read. The contract does the fetching itself at
-        settlement, so nobody can hand it a made-up document."""
         g, node = self._load_node(graph_id, node_id)
         self._require_active(g)
         if str(node["status"]) != OPEN:
@@ -355,6 +336,12 @@ class DeliveryGraph(gl.Contract):
         # The set of sources closes here and cannot be touched afterwards.
         if self._now() >= int(node["evidence_by"]):
             raise gl.vm.UserError("Evidence window has closed")
+        # Only the claimant may file. The payer filing would let the payer pick
+        # the evidence its own escrow is judged on, and anyone else filing could
+        # fill both slots with sources carrying nothing, forcing a rejection the
+        # claimant never chose.
+        if self._addr_hex(gl.message.sender_address).lower() != str(g["recipient"]).lower():
+            raise gl.vm.UserError("Only the recipient files evidence")
         if str(source_url).strip() not in [str(u) for u in node["sources"]]:
             raise gl.vm.UserError("Source is not in this node's allowlist")
         key = self._ev_key(graph_id, node_id)
@@ -366,8 +353,6 @@ class DeliveryGraph(gl.Contract):
         items.append(str(source_url).strip())
         self.evidence[key] = json.dumps(items)
         return "accepted"
-
-    # ---------------- judgement ----------------
 
     @gl.public.write
     def settle(self, graph_id: str, node_id: str) -> str:
@@ -400,15 +385,18 @@ class DeliveryGraph(gl.Contract):
             g["blocked_total"] = int(g["blocked_total"]) + amount
         else:
             urls = self._load_evidence(self._ev_key(graph_id, node_id))
+            if not urls:
+                # Nothing was filed, so the node is judged on the complete set
+                # configured at creation, never on an empty one.
+                urls = [str(u) for u in node["sources"]]
+            node["judged"] = urls
             markers = [str(m) for m in node["markers"]]
             res = self._examine(urls, markers)
             if not isinstance(res, dict):
                 res = {}
             retrieved = bool(res.get("retrieved", False))
-            met = [bool(x) for x in res.get("met", [])]
-            while len(met) < len(markers):
-                met.append(False)
-            met = met[:len(markers)]
+            met = [bool(x) for x in res.get("met", [])][:len(markers)]
+            met += [False] * (len(markers) - len(met))
             node["met"] = met
             node["spans"] = self._as_spans(res, len(markers))
 
@@ -420,11 +408,12 @@ class DeliveryGraph(gl.Contract):
                 node["reason"] = "every marker found"
             else:
                 node["status"] = REJECTED
-                node["reason"] = "not found: " + str(markers[0])[:80]
+                missed = markers[0]
                 for i in range(len(met)):
                     if not met[i]:
-                        node["reason"] = "not found: " + str(markers[i])[:80]
+                        missed = markers[i]
                         break
+                node["reason"] = "not found: " + str(missed)[:80]
 
             if str(node["status"]) == ACCEPTED:
                 destination = str(g["recipient"])
@@ -438,8 +427,6 @@ class DeliveryGraph(gl.Contract):
         # The tranche moves now, so nothing is left sitting in the contract.
         self._transfer(Address(destination), amount)
         return str(node["status"])
-
-    # ---------------- exits ----------------
 
     @gl.public.write
     def cancel(self, graph_id: str) -> str:
@@ -468,8 +455,6 @@ class DeliveryGraph(gl.Contract):
         g["status"] = CLOSED
         self._save_graph(g)
         return CLOSED
-
-    # ---------------- views ----------------
 
     @gl.public.view
     def get_graph(self, graph_id: str) -> str:

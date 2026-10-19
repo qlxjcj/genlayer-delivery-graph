@@ -1,6 +1,6 @@
 """Direct-mode tests for Delivery Graph.
 
-Groups A-G map onto the three lessons this contract is built around:
+Groups A-H map onto the lessons this contract is built around:
 
   A  creation and configuration        -- the conservation identity is enforced
                                           before a single unit can move
@@ -12,6 +12,8 @@ Groups A-G map onto the three lessons this contract is built around:
   E  fund conservation                 -- every unit reaches exactly one address
   F  uniform write preconditions       -- every refusal leaves the state untouched
   G  views                             -- no float or list ever leaves the contract
+  H  adversarial filing                -- nobody may choose or exhaust the
+                                          evidence a node is judged on
 """
 
 import json
@@ -20,6 +22,7 @@ import pytest
 
 from conftest import (
     BAD_ADDR,
+    BODY_ALPHA,
     ESCROW,
     M_BUILD,
     M_PCT,
@@ -27,6 +30,7 @@ from conftest import (
     M_TAIL,
     PAYER,
     RECIPIENT,
+    RECIPIENT_B,
     STRANGER,
     URL_ALPHA,
     URL_BRAVO,
@@ -259,11 +263,17 @@ def test_one_missing_marker_sends_the_tranche_back(graph):
     assert n["reason"] == "not found: release captain"
 
 
-def test_no_evidence_at_all_rejects_the_node(graph):
+def test_no_filing_at_all_judges_the_full_configured_set(graph):
+    """Filing is optional. With nothing filed the node is judged on the whole
+    set configured at creation, never on an empty one."""
     vm, c = graph
-    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100)])
-    assert settle(vm, c, gid, "n1", 200) == "REJECTED"
-    assert node_state(vm, c, gid, "n1")["reason"] == "no source could be read"
+    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                  sources=[URL_ALPHA, URL_CHARLIE])])
+    remock(vm, llm=[(r".*alpha-report.*", spans_json(["The build passed"]))])
+    assert settle(vm, c, gid, "n1", 200) == "ACCEPTED"
+    n = node_state(vm, c, gid, "n1")
+    assert n["judged"] == [URL_ALPHA, URL_CHARLIE]
+    assert n["met"] == [True]
 
 
 def test_a_quote_rescues_a_marker_broken_by_a_stray_blank(graph):
@@ -753,3 +763,103 @@ def test_get_node_shows_what_was_quoted(graph):
     assert n["met"] == [True, True]
     assert n["markers"] == [M_BUILD, M_SIGNED]
     assert n["sources"] == [URL_ALPHA]
+
+
+# ==========================================================================
+# H. adversarial: nobody may choose or exhaust what gets judged
+# ==========================================================================
+
+
+def test_a_stranger_cannot_file_evidence_at_all(graph):
+    """The attack this contract was corrected for. A node could configure four
+    sources while only two slots existed, so anyone could fill those two with
+    sources carrying nothing, cut the real evidence out of the judged set and
+    force a rejection the claimant never chose. Filing is the claimant's alone."""
+    vm, c = graph
+    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                  sources=[URL_ALPHA, URL_CHARLIE, URL_DELTA, URL_ECHO])])
+    for who in (STRANGER, PAYER, RECIPIENT_B):
+        with pytest.raises(Exception):
+            submit(vm, c, gid, "n1", URL_DELTA, 10, sender=who)
+        assert json.loads(c.get_evidence(gid, "n1")) == []
+
+
+def test_a_stranger_cannot_exhaust_the_slots_either(graph):
+    """Filling both slots is the whole attack: it needs no authority at all, so
+    the refusal has to hold slot by slot and for every hostile caller."""
+    vm, c = graph
+    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                  sources=[URL_ALPHA, URL_CHARLIE, URL_DELTA])])
+    for who in (STRANGER, PAYER, RECIPIENT_B):
+        for url in (URL_DELTA, URL_CHARLIE):
+            with pytest.raises(Exception):
+                submit(vm, c, gid, "n1", url, 10, sender=who)
+    assert json.loads(c.get_evidence(gid, "n1")) == []
+    # The claimant still has both slots exactly as they were.
+    assert submit(vm, c, gid, "n1", URL_ALPHA, 20) == "accepted"
+    assert submit(vm, c, gid, "n1", URL_CHARLIE, 30) == "accepted"
+    assert json.loads(c.get_evidence(gid, "n1")) == [URL_ALPHA, URL_CHARLIE]
+
+
+def test_the_attack_does_not_work_end_to_end(graph):
+    """Nothing filed by an attacker, and the node is still judged on the whole
+    configured set, so the real evidence is never cut out of it."""
+    vm, c = graph
+    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                  sources=[URL_ALPHA, URL_CHARLIE, URL_DELTA, URL_ECHO])])
+    for who in (STRANGER, PAYER):
+        for url in (URL_DELTA, URL_ECHO):
+            with pytest.raises(Exception):
+                submit(vm, c, gid, "n1", url, 10, sender=who)
+    before = balance(vm, RECIPIENT)
+    remock(vm, llm=[(r".*alpha-report.*", spans_json(["The build passed"]))])
+    assert settle(vm, c, gid, "n1", 200, sender=STRANGER) == "ACCEPTED"
+    assert node_state(vm, c, gid, "n1")["judged"] == [
+        URL_ALPHA, URL_CHARLIE, URL_DELTA, URL_ECHO]
+    assert balance(vm, RECIPIENT) == before + 10 ** 17
+
+
+def test_a_hostile_caller_cannot_change_what_is_judged(graph):
+    """Whoever calls settle, the judged set is exactly the configured set."""
+    vm, c = graph
+    for who in (STRANGER, PAYER, RECIPIENT_B):
+        gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                      sources=[URL_DELTA, URL_ALPHA])])
+        remock(vm, llm=[(r".*delta-report.*", spans_json([""]))])
+        assert settle(vm, c, gid, "n1", 200, sender=who) == "ACCEPTED"
+        n = node_state(vm, c, gid, "n1")
+        assert n["judged"] == [URL_DELTA, URL_ALPHA]
+        assert n["met"] == [True]
+
+
+def test_a_decoy_source_cannot_crowd_the_real_one_out(graph):
+    """Sources are read separately and in full, so a long decoy listed first
+    cannot push the real evidence out of the text the decision is made on."""
+    vm, c = graph
+    huge_decoy = "delta-report 9. " + ("padding " * 400)
+    vm.clear_mocks()
+    vm.mock_web(r".*delta\.example\.com.*",
+                {"method": "GET", "status": 200, "body": huge_decoy})
+    vm.mock_web(r".*alpha\.example\.com.*",
+                {"method": "GET", "status": 200, "body": BODY_ALPHA})
+    vm.mock_llm(r".*alpha-report.*", spans_json([""]))
+    gid = make_graph(vm, c, [node("n1", [M_BUILD], 10 ** 17, 100,
+                                  sources=[URL_DELTA, URL_ALPHA])])
+    before = balance(vm, RECIPIENT)
+    assert settle(vm, c, gid, "n1", 200) == "ACCEPTED"
+    assert balance(vm, RECIPIENT) == before + 10 ** 17
+
+
+def test_an_unusable_answer_never_releases_the_tranche(graph):
+    """An answer the contract cannot use credits nothing: the node still ends
+    and the tranche goes back rather than hanging."""
+    vm, c = graph
+    bad = ["not json at all", '{"spans":"nope"}', "", '{"other":1}']
+    nodes = [node("n" + str(i), [M_BUILD], 10 ** 17, 100, sources=[URL_BRAVO])
+             for i in range(len(bad))]
+    gid = make_graph(vm, c, nodes)
+    for i, answer in enumerate(bad):
+        remock(vm, llm=[(r".*bravo-report.*", answer)])
+        before = balance(vm, PAYER)
+        assert settle(vm, c, gid, "n" + str(i), 200) == "REJECTED"
+        assert balance(vm, PAYER) == before + 10 ** 17
