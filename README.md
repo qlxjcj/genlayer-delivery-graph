@@ -88,6 +88,24 @@ test_an_unusable_answer_never_releases_the_tranche
 
 ---
 
+## The one trust boundary
+
+The payer picks the sources at creation, so the payer picks **where** the markers
+are looked for. That is the point of the contract — the payer is the party
+defining acceptance — and it is public: `get_node` shows the whole list before
+any work starts, so a claimant can read it and decline the job.
+
+No source can hurt either. A marker counts if it appears in **any** fetched body,
+so adding, editing or listing a source can only ever help the claimant; there is
+no way to use one source to push a node from accepted to rejected.
+
+The residual is a payer who lists only venues they themselves control and then
+blanks all of them, which fails `retrieved` and returns the escrow. That is
+visible in the configured list at creation, before any work is done, and it is
+why a list of several independent venues is the safer configuration.
+
+---
+
 ## What the model does, and what it does not
 
 **The model never decides anything.** There is no score, no opinion, no
